@@ -155,3 +155,85 @@ async def list_messages(
                 response.append(TextContent(type="text", text=message.text))
 
     return response
+
+
+### ListFolders ###
+
+
+class ListFolders(ToolArgs):
+    """List all dialog folders (categories) configured in Telegram."""
+
+
+@tool_runner.register
+async def list_folders(
+    args: ListFolders,
+) -> t.Sequence[TextContent | ImageContent | EmbeddedResource]:
+    logger.info("method[ListFolders] args[%s]", args)
+
+    response: list[TextContent] = []
+    async with create_client() as client:
+        result = await client(functions.messages.GetDialogFiltersRequest())
+        for folder in result.filters:
+            if hasattr(folder, "title"):
+                response.append(
+                    TextContent(
+                        type="text",
+                        text=f"id={folder.id} title='{folder.title}'",
+                    )
+                )
+
+    return response
+
+
+### ListDialogsByFolder ###
+
+
+class ListDialogsByFolder(ToolArgs):
+    """List all dialogs and channels inside a specific Telegram folder by its title."""
+
+    folder_title: str
+
+
+@tool_runner.register
+async def list_dialogs_by_folder(
+    args: ListDialogsByFolder,
+) -> t.Sequence[TextContent | ImageContent | EmbeddedResource]:
+    logger.info("method[ListDialogsByFolder] args[%s]", args)
+
+    async with create_client() as client:
+        result = await client(functions.messages.GetDialogFiltersRequest())
+
+        target_folder = None
+        for folder in result.filters:
+            if hasattr(folder, "title") and folder.title.lower() == args.folder_title.lower():
+                target_folder = folder
+                break
+
+        if target_folder is None:
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Folder '{args.folder_title}' not found. Use ListFolders to see available folders.",
+                )
+            ]
+
+        response: list[TextContent] = []
+        for peer in target_folder.include_peers:
+            try:
+                entity = await client.get_entity(peer)
+                name = getattr(entity, "title", None) or getattr(entity, "username", None) or str(peer)
+                entity_id = getattr(entity, "id", None)
+                response.append(
+                    TextContent(
+                        type="text",
+                        text=f"name='{name}' id={entity_id}",
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not resolve peer %s: %s", peer, e)
+                continue
+
+        if not response:
+            return [TextContent(type="text", text=f"Folder '{args.folder_title}' is empty or has no resolvable peers.")]
+
+        return response
